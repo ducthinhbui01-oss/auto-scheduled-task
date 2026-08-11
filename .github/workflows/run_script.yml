@@ -2,9 +2,8 @@ name: Auto Scheduled Bot
 
 on:
   schedule:
-    # Lịch chạy: 08:00 sáng giờ Việt Nam hàng ngày (01:00 UTC)
     - cron: '0 1 * * *'
-  workflow_dispatch: # Cho phép bấm nút "Run workflow" để chạy thủ công bất kỳ lúc nào
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -27,4 +26,5 @@ jobs:
       - name: Execute Python script
         env:
           MY_COOKIE: ${{ secrets.MY_COOKIE }}
+          SHEET_URL: ${{ secrets.SHEET_URL }}
         run: python main.py
