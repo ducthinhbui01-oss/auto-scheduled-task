@@ -8,17 +8,24 @@ username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
+# Nhận biết sự kiện kích hoạt từ GitHub Actions
+event_name = os.getenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+
 if not username or not password or not sheet_url:
     print("❌ Lỗi: Thiếu USERNAME, PASSWORD hoặc SHEET_URL trong GitHub Secrets!")
     exit(1)
 
 def run():
     # ------------------------------------------------------------------
-    # TẠO ĐỘ TRỄ NGẪU NHIÊN TỪ 5 PHÚT ĐẾN 60 PHÚT (300 đến 3600 GIÂY)
+    # NẾU BẤM RUN WORKFLOW THỦ CÔNG: BỎ QUA CHỜ (CHẠY NGAY TRONG 15s)
+    # NẾU HỆ THỐNG TỰ ĐỘNG CHẠY THEO LỊCH: TẠM DỪNG NGẪU NHIÊN 5 - 60 PHÚT
     # ------------------------------------------------------------------
-    delay_seconds = random.randint(300, 3600)
-    print(f"⏳ Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s) để xáo trộn thời gian lấy Cookie...")
-    time.sleep(delay_seconds)
+    if event_name == "workflow_dispatch":
+        print("⚡ Kích hoạt thủ công (Run workflow) -> Bỏ qua thời gian chờ, chạy ngay lập tức!")
+    else:
+        delay_seconds = random.randint(300, 3600)
+        print(f"⏳ Chạy theo lịch tự động: Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s)...")
+        time.sleep(delay_seconds)
 
     with sync_playwright() as p:
         print("1. Đang khởi chạy trình duyệt Chromium ngầm...")
@@ -26,7 +33,6 @@ def run():
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        page = context.cookies
         page = context.new_page()
 
         print("2. Truy cập https://spx.shopee.vn/ ...")
