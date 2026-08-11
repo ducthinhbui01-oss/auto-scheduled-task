@@ -1,43 +1,62 @@
 import os
+import time
+import random
 import requests
+from playwright.sync_api import sync_playwright
 
+username = os.getenv("USERNAME")
+password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
-print("==========================================")
-print("       TEST CHẨN ĐOÁN GOOGLE SHEET        ")
-print("==========================================")
-
-# 1. Kiểm tra xem SHEET_URL có bị trống không
-if not sheet_url:
-    print("❌ LỖI 1: Biến SHEET_URL trong GitHub Secrets đang bị Trống!")
+if not username or not password or not sheet_url:
+    print("❌ Lỗi: Thiếu USERNAME, PASSWORD hoặc SHEET_URL trong GitHub Secrets!")
     exit(1)
 
-print(f"👉 Link SHEET_URL hiện tại: {sheet_url[:35]}...{sheet_url[-10:] if len(sheet_url) > 10 else ''}")
+def run():
+    # ------------------------------------------------------------------
+    # TẠO ĐỘ TRỄ NGẪU NHIÊN TỪ 5 PHÚT ĐẾN 60 PHÚT (300 đến 3600 GIÂY)
+    # ------------------------------------------------------------------
+    delay_seconds = random.randint(300, 3600)
+    print(f"⏳ Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s) để xáo trộn thời gian lấy Cookie...")
+    time.sleep(delay_seconds)
 
-# 2. Kiểm tra định dạng link
-if "docs.google.com/spreadsheets" in sheet_url:
-    print("❌ LỖI 2: Bạn đang dán LINK TRANG GOOGLE SHEET (docs.google.com)! Bắt buộc phải dán Link Web App (script.google.com).")
-    exit(1)
+    with sync_playwright() as p:
+        print("1. Đang khởi chạy trình duyệt Chromium ngầm...")
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.cookies
+        page = context.new_page()
 
-if not sheet_url.startswith("https://script.google.com/macros/s/"):
-    print("❌ LỖI 3: Link SHEET_URL sai cấu trúc Web App! (Link chuẩn phải bắt đầu bằng https://script.google.com/macros/s/).")
-    exit(1)
+        print("2. Truy cập https://spx.shopee.vn/ ...")
+        page.goto("https://spx.shopee.vn/", timeout=60000)
+        page.wait_for_load_state("networkidle")
 
-# 3. Gửi Request thử nghiệm trực tiếp sang Google Sheet
-print("\n🔄 Đang thử gửi 1 dòng test dữ liệu sang Google Sheet...")
-test_payload = {
-    "status": "TEST CHẨN ĐOÁN TỪ GITHUB",
-    "result": "Nếu bạn thấy dòng này trên Google Sheet tức là hệ thống đã THÀNH CÔNG 100%!"
-}
+        print("3. Điền thông tin Đăng nhập...")
+        page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
+        page.locator("input[type='password'], input[name='password']").first.fill(password)
 
-try:
-    res = requests.post(sheet_url, json=test_payload, timeout=20)
-    print(f"Mã phản hồi HTTP: {res.status_code}")
-    print(f"Nội dung Google Sheet trả về: {res.text}")
-    
-    if "SUCCESS_OK" in res.text or "OK" in res.text:
-        print("\n✅ THÀNH CÔNG 100%! Hãy mở Google Trang tính kiểm tra Hàng số 2 ngay bây giờ.")
-    else:
-        print("\n❌ THẤT BẠI: Google Sheet trả về trang lỗi!")
-except Exception as e:
-    print(f"\n❌ LỖI NGOẠI LỆ: {e}")
+        print("4. Bấm nút Đăng nhập...")
+        page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
+
+        page.wait_for_timeout(5000)
+
+        print("5. Rút trích danh sách Cookie phiên làm việc mới...")
+        cookies = context.cookies()
+        cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+        
+        print(f"Lấy thành công {len(cookies)} cookies từ SPX Shopee!")
+        browser.close()
+
+        print("6. Đang gửi chuỗi Cookie mới sang Google Trang tính...")
+        payload = {
+            "status": "Lấy Cookie SPX Thành Công",
+            "result": cookie_string
+        }
+        
+        sheet_res = requests.post(sheet_url, json=payload, timeout=30)
+        print(f"Kết quả lưu vào Sheet: {sheet_res.text}")
+
+if __name__ == "__main__":
+    run()
