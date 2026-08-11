@@ -2,9 +2,9 @@ name: Auto Extract SPX Cookie
 
 on:
   schedule:
-    # Tự động chạy lấy Cookie vào 08:00 sáng giờ Việt Nam hàng ngày (01:00 UTC)
-    - cron: '0 1 * * *'
-  workflow_dispatch: # Cho phép bấm Run workflow chạy ngay lập tức
+    # Chạy tự động mỗi 8 tiếng một lần (3 lần/ngày)
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
