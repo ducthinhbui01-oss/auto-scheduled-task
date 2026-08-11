@@ -2,8 +2,8 @@ name: Auto Extract SPX Cookie
 
 on:
   schedule:
-    # Chạy tự động mỗi 8 tiếng một lần (3 lần/ngày)
-    - cron: '0 */8 * * *'
+    # Tự động chạy mỗi 3 tiếng một lần (vào các mốc 00:00, 03:00, 06:00, 09:00, 12:00...)
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 jobs:
