@@ -8,7 +8,6 @@ username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
-# Nhận biết sự kiện kích hoạt từ GitHub Actions
 event_name = os.getenv("GITHUB_EVENT_NAME", "workflow_dispatch")
 
 if not username or not password or not sheet_url:
@@ -17,14 +16,14 @@ if not username or not password or not sheet_url:
 
 def run():
     # ------------------------------------------------------------------
-    # NẾU BẤM RUN WORKFLOW THỦ CÔNG: BỎ QUA CHỜ (CHẠY NGAY TRONG 15s)
-    # NẾU HỆ THỐNG TỰ ĐỘNG CHẠY THEO LỊCH: TẠM DỪNG NGẪU NHIÊN 5 - 60 PHÚT
+    # NẾU BẤM RUN WORKFLOW THỦ CÔNG: BỎ QUA CHỜ
+    # NẾU LỊCH TỰ ĐỘNG 3H/LẦN: TẠM DỪNG NGẪU NHIÊN TỪ 3 ĐẾN 20 PHÚT
     # ------------------------------------------------------------------
     if event_name == "workflow_dispatch":
         print("⚡ Kích hoạt thủ công (Run workflow) -> Bỏ qua thời gian chờ, chạy ngay lập tức!")
     else:
-        delay_seconds = random.randint(300, 3600)
-        print(f"⏳ Chạy theo lịch tự động: Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s)...")
+        delay_seconds = random.randint(180, 1200) # Tạm dừng ngẫu nhiên từ 3 đến 20 phút
+        print(f"⏳ Chạy theo lịch tự động 3h/lần: Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s)...")
         time.sleep(delay_seconds)
 
     with sync_playwright() as p:
