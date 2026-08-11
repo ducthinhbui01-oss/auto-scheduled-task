@@ -2,32 +2,28 @@ name: Auto Scheduled Bot
 
 on:
   schedule:
-    # Cú pháp Cron chạy lúc 08:00 sáng giờ Việt Nam (01:00 UTC) hàng ngày
+    # Lịch chạy: 08:00 sáng giờ Việt Nam hàng ngày (01:00 UTC)
     - cron: '0 1 * * *'
-  workflow_dispatch: # Cho phép bấm nút "Run workflow" để chạy thủ công bất cứ lúc nào
+  workflow_dispatch: # Cho phép bấm nút "Run workflow" để chạy thủ công bất kỳ lúc nào
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Tải code từ Repo về máy chủ
       - name: Checkout repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # 2. Cài đặt môi trường Python
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
 
-      # 3. Cài đặt thư viện từ requirements.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # 4. Chạy script main.py và truyền Cookie từ Secrets vào
       - name: Execute Python script
         env:
           MY_COOKIE: ${{ secrets.MY_COOKIE }}
