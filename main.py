@@ -1,6 +1,7 @@
 import os
 import time
 import random
+from datetime import datetime, timedelta
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -16,15 +17,12 @@ if not username or not password or not sheet_url:
     exit(1)
 
 def run():
-    # ------------------------------------------------------------------
-    # NẾU BẤM RUN WORKFLOW THỦ CÔNG: BỎ QUA CHỜ (CHẠY NGAY TRONG 15s)
-    # NẾU TỰ ĐỘNG THEO LỊCH 3H/LẦN: TẠM DỪNG NGẪU NHIÊN TỪ 5 ĐẾN 30 PHÚT
-    # ------------------------------------------------------------------
+    # NẾU BẤM THỦ CÔNG: Chạy ngay lập tức trong 15s
     if event_name == "workflow_dispatch":
         print("⚡ Kích hoạt thủ công (Run workflow) -> Bỏ qua thời gian chờ, chạy ngay lập tức!")
     else:
-        delay_seconds = random.randint(300, 1800) # Chờ ngẫu nhiên từ 5 đến 30 phút
-        print(f"⏳ Chạy theo lịch tự động 3h/lần: Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s)...")
+        delay_seconds = random.randint(300, 1800)
+        print(f"⏳ Chạy theo lịch tự động: Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s)...")
         time.sleep(delay_seconds)
 
     with sync_playwright() as p:
@@ -45,20 +43,50 @@ def run():
 
         print("4. Bấm nút Đăng nhập...")
         page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
-
         page.wait_for_timeout(5000)
 
+        # --- 5. RÚT TRÍCH COOKIE ---
         print("5. Rút trích danh sách Cookie phiên làm việc mới...")
         cookies = context.cookies()
         cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
-        
         print(f"Lấy thành công {len(cookies)} cookies từ SPX Shopee!")
+
+        # --- 6. LẤY DỮ LIỆU LINEHAUL TRIPS (Vượt qua SAP WAF trực tiếp trong browser) ---
+        print("6. Đang kéo dữ liệu Linehaul Trips từ SPX...")
+        now = datetime.now()
+        yesterday = now - timedelta(days=1)
+        start_time = int(datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0).timestamp())
+        end_time = int(datetime(now.year, now.month, now.day, 23, 59, 59).timestamp())
+
+        linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&pageno=1&count=100&query_type=1&tab_type=3&std={start_time},{end_time}"
+
+        trip_res = page.evaluate("""async (url) => {
+            try {
+                const res = await fetch(url, {
+                    headers: {
+                        'app': 'FMS Portal',
+                        'Accept': 'application/json, text/plain, */*'
+                    }
+                });
+                return await res.json();
+            } catch (e) {
+                return { error: e.toString() };
+            }
+        }""", linehaul_url)
+
+        trips = []
+        if isinstance(trip_res, dict):
+            trips = trip_res.get('data', {}).get('list') or trip_res.get('data', {}).get('trips') or []
+        print(f"-> Lấy thành công {len(trips)} chuyến xe Linehaul!")
+
         browser.close()
 
-        print("6. Đang gửi chuỗi Cookie mới sang Google Trang tính...")
+        # --- 7. GỬI COOKIE & LINEHAUL TRIPS VỀ GOOGLE SHEETS ---
+        print("7. Đang gửi dữ liệu sang Google Trang tính...")
         payload = {
             "status": "Lấy Cookie SPX Thành Công",
-            "result": cookie_string
+            "result": cookie_string,
+            "linehaul_trips": trips
         }
         
         sheet_res = requests.post(sheet_url, json=payload, timeout=30)
