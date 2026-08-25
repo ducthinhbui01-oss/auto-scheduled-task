@@ -1,0 +1,28 @@
+name: 🚚 Kéo Linehaul Trips
+
+on:
+  workflow_dispatch: # Cho phép bấm chạy thủ công
+
+jobs:
+  run-linehaul:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright requests
+          playwright install chromium
+
+      - name: Run Linehaul Script
+        env:
+          USERNAME: ${{ secrets.USERNAME }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          SHEET_URL: ${{ secrets.SHEET_URL }}
+        run: python linehaul.py
