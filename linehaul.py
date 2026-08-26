@@ -11,7 +11,7 @@ username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
-# Khung giờ chuẩn theo màn hình: Từ hiện tại (0h trước) -> 8 tiếng tiếp theo
+# Khung giờ: From 0 hrs ago ~ To 8 hrs after (Hiện tại -> 8 tiếng tới)
 FROM_HOURS_AGO = 0
 TO_HOURS_AFTER = 8
 
@@ -80,6 +80,34 @@ def format_item_to_row(item, tz_vn):
             
     return row
 
+def safe_evaluate(page, url, retries=3):
+    """Gọi fetch an toàn, tự động thử lại nếu trang web đang chuyển hướng"""
+    for attempt in range(retries):
+        try:
+            return page.evaluate("""async (apiUrl) => {
+                try {
+                    const res = await fetch(apiUrl, {
+                        headers: {
+                            'app': 'FMS Portal',
+                            'Accept': 'application/json, text/plain, */*'
+                        }
+                    });
+                    return await res.json();
+                } catch (e) {
+                    return { error: e.toString() };
+                }
+            }""", url)
+        except Exception as e:
+            if attempt < retries - 1 and ("destroyed" in str(e).lower() or "navigation" in str(e).lower()):
+                print("   -> Đang chuyển hướng trang, chờ 3s rồi thử lại...")
+                time.sleep(3)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except:
+                    pass
+                continue
+            raise e
+
 def run():
     tz_vn = timezone(timedelta(hours=7))
     now_vn = datetime.now(tz_vn)
@@ -99,39 +127,36 @@ def run():
             )
             page = context.new_page()
 
-            print("2. Đăng nhập SPX...")
+            print("2. Đang truy cập và đăng nhập SPX...")
             page.goto("https://spx.shopee.vn/", timeout=60000)
             page.wait_for_load_state("networkidle")
 
             page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
             page.locator("input[type='password'], input[name='password']").first.fill(password)
-            page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
-            page.wait_for_timeout(6000)
+            
+            login_btn = page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first
+            login_btn.click()
+            
+            # Chờ hoàn tất chuyển hướng sau khi đăng nhập
+            print("-> Đang chờ trang đăng nhập ổn định...")
+            try:
+                page.wait_for_load_state("networkidle", timeout=20000)
+            except:
+                pass
+            page.wait_for_timeout(5000)
 
-            # Mở rộng bao gồm tất cả các loại station_type
+            # Bao phủ toàn bộ các loại station_type để không sót Hub nào
             all_station_types = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"
             
             all_trips = []
             page_no = 1
-            max_pages = 40  # Kéo tối đa 40 trang (lên tới 4000 chuyến xe)
+            max_pages = 40  # Tối đa 40 trang
 
             print("3. Đang kéo dữ liệu tất cả các Hub qua các trang...")
             while page_no <= max_pages:
                 linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type={all_station_types}&trip_station_status=0&pageno={page_no}&count=100&query_type=1&tab_type=3&std={start_time},{end_time}"
 
-                trip_res = page.evaluate("""async (url) => {
-                    try {
-                        const res = await fetch(url, {
-                            headers: {
-                                'app': 'FMS Portal',
-                                'Accept': 'application/json, text/plain, */*'
-                            }
-                        });
-                        return await res.json();
-                    } catch (e) {
-                        return { error: e.toString() };
-                    }
-                }""", linehaul_url)
+                trip_res = safe_evaluate(page, linehaul_url)
 
                 if not isinstance(trip_res, dict):
                     break
@@ -167,7 +192,7 @@ def run():
                 print("⚠️ Cảnh báo: Không có chuyến xe nào trong khung giờ này.")
                 return
 
-            # 4. Bóc tách và chuẩn hóa dữ liệu sang mảng 24 cột
+            # 4. Bóc tách và chuẩn hóa dữ liệu 24 cột
             print("4. Đang bóc tách và định dạng dữ liệu 24 cột...")
             rows_data = [format_item_to_row(t, tz_vn) for t in all_trips]
 
