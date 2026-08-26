@@ -42,22 +42,26 @@ def run():
 
             page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
             page.locator("input[type='password'], input[name='password']").first.fill(password)
-            page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
             
-            # Chờ hoàn tất tiến trình đăng nhập và khởi tạo session
-            print("-> Đang chờ phiên đăng nhập khởi tạo...")
-            time.sleep(6)
-            try:
-                page.wait_for_load_state("networkidle", timeout=15000)
-            except:
-                pass
+            # Bấm nút Đăng nhập và nhấn Enter
+            login_btn = page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first
+            login_btn.click()
+            page.locator("input[type='password'], input[name='password']").first.press("Enter")
 
-            # Rút trích cookie
-            cookies = context.cookies()
-            cookie_dict = {c['name']: c['value'] for c in cookies}
+            # --- CHỜ THÔNG MINH CHO ĐẾN KHI MÁY CHỦ CẤP ĐỦ TOKEN ---
+            print("-> Đang chờ máy chủ SPX xác thực và cấp mã phiên...")
+            cookie_dict = {}
+            for i in range(15):
+                time.sleep(1)
+                cookies = context.cookies()
+                cookie_dict = {c['name']: c['value'] for c in cookies}
+                if any(k in cookie_dict for k in ['spx_uid', 'fms_user_id', 'csrftoken', 'SPC_EC']):
+                    print(f"-> Đăng nhập thành công! Đã nhận đủ mã phiên sau {i+1} giây.")
+                    break
+
             browser.close()
 
-            # Đồng bộ hóa các cặp token định danh bắt buộc của SPX
+            # Đồng bộ các biến định danh
             user_id = cookie_dict.get('spx_uid') or cookie_dict.get('fms_user_id') or ''
             user_key = cookie_dict.get('spx_uk') or cookie_dict.get('fms_user_skey') or ''
 
@@ -77,7 +81,7 @@ def run():
             cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
             csrf_token = cookie_dict.get('csrftoken', '')
 
-            print(f"-> Chuỗi Cookie hợp lệ (UID: {user_id}, CID: VN, CSRF: {'Có' if csrf_token else 'Không'})")
+            print(f"-> Chuỗi Cookie hoàn chỉnh (UID: {user_id}, CID: VN, CSRF: {'Có' if csrf_token else 'Không'})")
 
             req_headers = {
                 "app": "FMS Portal",
