@@ -45,18 +45,25 @@ def run():
             page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
             page.wait_for_timeout(5000)
 
-            # BƯỚC QUAN TRỌNG: Điều hướng thẳng vào trang Linehaul để kích hoạt phân hệ FMS Portal
-            print("3. Truy cập trang Linehaul Trips để kích hoạt quyền FMS...")
+            print("3. Truy cập trang Linehaul Trips để kích hoạt phân hệ FMS...")
             page.goto("https://spx.shopee.vn/admin/transportation/trip", timeout=60000)
             page.wait_for_load_state("networkidle")
             time.sleep(4)
 
-            # Rút trích csrftoken sau khi đã nạp phân hệ Linehaul
+            # Rút trích cookie đầy đủ từ trình duyệt
             cookies = context.cookies()
-            csrf_token = next((c['value'] for c in cookies if c['name'] == 'csrftoken'), "")
+            cookie_dict = {c['name']: c['value'] for c in cookies}
+            cookie_dict['spx_cid'] = 'VN'
+            cookie_dict['spx_st'] = '1'
+            
+            cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
+            csrf_token = cookie_dict.get('csrftoken', '')
+            browser.close()
 
+            # Sử dụng thư viện requests chuẩn của Python để đảm bảo 100% gửi trọn vẹn Cookie
             req_headers = {
                 "app": "FMS Portal",
+                "Cookie": cookie_string,
                 "Accept": "application/json, text/plain, */*",
                 "Referer": "https://spx.shopee.vn/admin/transportation/trip",
                 "Origin": "https://spx.shopee.vn",
@@ -73,17 +80,17 @@ def run():
             while page_no <= max_pages:
                 linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&pageno={page_no}&count=100&query_type=1&tab_type=3&std={start_time},{end_time}"
 
-                response = context.request.get(linehaul_url, headers=req_headers)
+                response = requests.get(linehaul_url, headers=req_headers, timeout=30)
                 
-                if response.status != 200:
-                    print(f"   -> Lỗi HTTP {response.status}: {response.text()[:200]}")
+                if response.status_code != 200:
+                    print(f"   -> Lỗi HTTP {response.status_code}: {response.text[:200]}")
                     break
 
                 trip_res = response.json()
                 trips = trip_res.get('data', {}).get('list') or trip_res.get('data', {}).get('trips') or []
                 
                 if not trips:
-                    print(f"   -> Đã hết chuyến xe ở trang {page_no}.")
+                    print(f"   -> Đã hết dữ liệu ở trang {page_no}.")
                     break
 
                 all_trips.extend(trips)
@@ -95,7 +102,6 @@ def run():
                 page_no += 1
                 time.sleep(0.3)
 
-            browser.close()
             print(f"✅ Tổng cộng thu thập được: {len(all_trips)} chuyến xe.")
 
             if len(all_trips) == 0:
