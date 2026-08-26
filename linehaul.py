@@ -1,10 +1,8 @@
 import os
-import re
 import time
 import json
 import math
 import traceback
-import concurrent.futures
 from datetime import datetime, timedelta, timezone
 import requests
 from playwright.sync_api import sync_playwright
@@ -13,6 +11,7 @@ username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
+# Khung giờ chuẩn theo màn hình: Từ hiện tại (0h trước) -> 8 tiếng tiếp theo
 FROM_HOURS_AGO = 0
 TO_HOURS_AFTER = 8
 
@@ -30,7 +29,7 @@ if not username or not password or not sheet_url:
     exit(1)
 
 def format_trip_station(st_list, tz_vn):
-    """Bóc tách mảng trip_station thành lộ trình trực quan: Trạm 1 (STD) ➔ Trạm 2 (STA)"""
+    """Bóc tách mảng trip_station thành lộ trình: Trạm 1 (STD) ➔ Trạm 2 (STA)"""
     if not isinstance(st_list, list) or len(st_list) == 0:
         return ""
     parts = []
@@ -57,7 +56,7 @@ def format_item_to_row(item, tz_vn):
         if col == "trip_station":
             row.append(format_trip_station(val, tz_vn))
         
-        # 2. Xóa bỏ dấu ngoặc vuông ["..."] cho các cột danh sách trạm kế tiếp
+        # 2. Xóa bỏ dấu ngoặc vuông ["..."] cho các cột danh sách trạm
         elif col in ["next_station_list", "next_station_name_list", "next_station_code_list"]:
             if isinstance(val, list):
                 row.append(", ".join(map(str, val)))
@@ -81,18 +80,6 @@ def format_item_to_row(item, tz_vn):
             
     return row
 
-def fetch_page(page_no, base_url, req_headers):
-    """Hàm tải 1 trang dữ liệu"""
-    url = f"{base_url}&pageno={page_no}&count=100"
-    try:
-        res = requests.get(url, headers=req_headers, timeout=20)
-        if res.status_code == 200:
-            data = res.json()
-            return data.get('data', {}).get('list') or data.get('data', {}).get('trips') or []
-    except:
-        pass
-    return []
-
 def run():
     tz_vn = timezone(timedelta(hours=7))
     now_vn = datetime.now(tz_vn)
@@ -100,104 +87,87 @@ def run():
     start_time = int((now_vn - timedelta(hours=FROM_HOURS_AGO)).timestamp())
     end_time = int((now_vn + timedelta(hours=TO_HOURS_AFTER)).timestamp())
 
-    print(f"⚡ Bắt đầu kéo Linehaul Siêu Tốc (Giờ VN: {now_vn.strftime('%H:%M %d/%m/%Y')})")
+    print(f"⚡ Bắt đầu kéo Linehaul Toàn Bộ Các Hub (Giờ VN: {now_vn.strftime('%H:%M %d/%m/%Y')})")
     print(f"   -> Dải giờ lọc STD: từ {datetime.fromtimestamp(start_time, tz_vn).strftime('%H:%M %d/%m')} đến {datetime.fromtimestamp(end_time, tz_vn).strftime('%H:%M %d/%m')}")
 
     try:
         with sync_playwright() as p:
-            print("1. Khởi chạy trình duyệt đăng nhập SPX...")
+            print("1. Khởi chạy trình duyệt Chromium ngầm...")
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             page = context.new_page()
 
+            print("2. Đăng nhập SPX...")
             page.goto("https://spx.shopee.vn/", timeout=60000)
             page.wait_for_load_state("networkidle")
 
             page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
             page.locator("input[type='password'], input[name='password']").first.fill(password)
+            page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
+            page.wait_for_timeout(6000)
+
+            # Mở rộng bao gồm tất cả các loại station_type
+            all_station_types = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"
             
-            login_btn = page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first
-            login_btn.click()
-            page.locator("input[type='password'], input[name='password']").first.press("Enter")
+            all_trips = []
+            page_no = 1
+            max_pages = 40  # Kéo tối đa 40 trang (lên tới 4000 chuyến xe)
 
-            # Chờ nhận token đăng nhập
-            print("-> Đang chờ xác thực phiên...")
-            user_id = ""
-            user_key = ""
-            cookie_dict = {}
+            print("3. Đang kéo dữ liệu tất cả các Hub qua các trang...")
+            while page_no <= max_pages:
+                linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type={all_station_types}&trip_station_status=0&pageno={page_no}&count=100&query_type=1&tab_type=3&std={start_time},{end_time}"
 
-            for i in range(20):
-                time.sleep(1)
-                cookies = context.cookies()
-                cookie_dict = {c['name']: c['value'] for c in cookies}
-                user_id = cookie_dict.get('fms_user_id') or cookie_dict.get('spx_uid') or ''
-                user_key = cookie_dict.get('fms_user_skey') or cookie_dict.get('spx_uk') or ''
-                if user_id:
-                    print(f"-> Đăng nhập thành công (User ID: {user_id})")
+                trip_res = page.evaluate("""async (url) => {
+                    try {
+                        const res = await fetch(url, {
+                            headers: {
+                                'app': 'FMS Portal',
+                                'Accept': 'application/json, text/plain, */*'
+                            }
+                        });
+                        return await res.json();
+                    } catch (e) {
+                        return { error: e.toString() };
+                    }
+                }""", linehaul_url)
+
+                if not isinstance(trip_res, dict):
                     break
 
+                data_obj = trip_res.get('data') or {}
+                trips = []
+                if isinstance(data_obj, list):
+                    trips = data_obj
+                elif isinstance(data_obj, dict):
+                    trips = (data_obj.get('list') or 
+                             data_obj.get('records') or 
+                             data_obj.get('trips') or 
+                             data_obj.get('trip_list') or 
+                             data_obj.get('trip_station_list') or [])
+
+                if not trips:
+                    print(f"   -> Đã hết chuyến xe ở trang {page_no}.")
+                    break
+
+                all_trips.extend(trips)
+                print(f"   -> Đã lấy thành công Trang {page_no}: {len(trips)} chuyến (Tổng cộng: {len(all_trips)} chuyến)...")
+
+                if len(trips) < 100:
+                    break
+
+                page_no += 1
+                time.sleep(0.3)
+
             browser.close()
-
-            # Đồng bộ Cookie
-            cookie_dict['spx_uid'] = str(user_id)
-            cookie_dict['fms_user_id'] = str(user_id)
-            if user_key:
-                cookie_dict['spx_uk'] = str(user_key)
-                cookie_dict['fms_user_skey'] = str(user_key)
-            cookie_dict['spx_cid'] = 'VN'
-            cookie_dict['spx_st'] = '1'
-            cookie_dict['language'] = 'vi'
-            cookie_dict['spx-lang'] = 'vi'
-            cookie_dict['spx-admin-lang'] = 'vi'
-
-            cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
-            csrf_token = cookie_dict.get('csrftoken', '')
-
-            req_headers = {
-                "app": "FMS Portal",
-                "Cookie": cookie_string,
-                "Accept": "application/json, text/plain, */*",
-                "Referer": "https://spx.shopee.vn/admin/transportation/trip",
-                "Origin": "https://spx.shopee.vn",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            if csrf_token:
-                req_headers["x-csrftoken"] = csrf_token
-
-            base_api_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&query_type=1&tab_type=3&std={start_time},{end_time}"
-
-            # 2. Tải trang 1 để tính tổng số trang
-            print("2. Đang kiểm tra tổng số chuyến xe...")
-            p1_res = requests.get(f"{base_api_url}&pageno=1&count=100", headers=req_headers, timeout=30).json()
-            total_trips = p1_res.get('data', {}).get('total', 0)
-            p1_trips = p1_res.get('data', {}).get('list') or p1_res.get('data', {}).get('trips') or []
-            
-            all_trips = list(p1_trips)
-            total_pages = min(math.ceil(total_trips / 100), 50)
-
-            print(f"-> Tổng cộng hệ thống có: {total_trips} chuyến xe (~{total_pages} trang).")
-
-            # 3. Kéo đa luồng tất cả các trang còn lại
-            if total_pages > 1:
-                print(f"3. Đang mở 8 luồng kéo song song từ trang 2 đến {total_pages}...")
-                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                    future_to_page = {
-                        executor.submit(fetch_page, p_no, base_api_url, req_headers): p_no 
-                        for p_no in range(2, total_pages + 1)
-                    }
-                    for future in concurrent.futures.as_completed(future_to_page):
-                        res_list = future.result()
-                        all_trips.extend(res_list)
-
-            print(f"✅ Thu thập hoàn tất: {len(all_trips)} chuyến xe!")
+            print(f"✅ Tổng cộng thu thập được: {len(all_trips)} chuyến xe từ tất cả các Hub.")
 
             if len(all_trips) == 0:
-                print("⚠️ Không có dữ liệu để gửi.")
+                print("⚠️ Cảnh báo: Không có chuyến xe nào trong khung giờ này.")
                 return
 
-            # 4. Chuẩn hóa bóc tách dữ liệu 24 cột
+            # 4. Bóc tách và chuẩn hóa dữ liệu sang mảng 24 cột
             print("4. Đang bóc tách và định dạng dữ liệu 24 cột...")
             rows_data = [format_item_to_row(t, tz_vn) for t in all_trips]
 
