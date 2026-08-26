@@ -43,34 +43,39 @@ def run():
             page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
             page.locator("input[type='password'], input[name='password']").first.fill(password)
             
-            # Bấm nút Đăng nhập và nhấn Enter
             login_btn = page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first
             login_btn.click()
-            page.locator("input[type='password'], input[name='password']").first.press("Enter")
+            time.sleep(4)
 
-            # --- CHỜ THÔNG MINH CHO ĐẾN KHI MÁY CHỦ CẤP ĐỦ TOKEN ---
-            print("-> Đang chờ máy chủ SPX xác thực và cấp mã phiên...")
-            cookie_dict = {}
-            for i in range(15):
-                time.sleep(1)
-                cookies = context.cookies()
-                cookie_dict = {c['name']: c['value'] for c in cookies}
-                if any(k in cookie_dict for k in ['spx_uid', 'fms_user_id', 'csrftoken', 'SPC_EC']):
-                    print(f"-> Đăng nhập thành công! Đã nhận đủ mã phiên sau {i+1} giây.")
-                    break
+            # --- BƯỚC QUAN TRỌNG: Vào trang Linehaul Trips để kích hoạt spx_uid ---
+            print("3. Truy cập trang Linehaul Trips để kích hoạt spx_uid...")
+            page.goto("https://spx.shopee.vn/admin/transportation/trip", timeout=60000)
+            page.wait_for_load_state("networkidle")
+            time.sleep(5)
+
+            # Rút trích cookie
+            cookies = context.cookies()
+            cookie_dict = {c['name']: c['value'] for c in cookies}
+
+            # Lấy UID từ Cookie hoặc LocalStorage của trang
+            user_id = cookie_dict.get('spx_uid') or cookie_dict.get('fms_user_id') or ''
+            if not user_id:
+                try:
+                    user_id = page.evaluate("() => localStorage.getItem('fms_user_id') || localStorage.getItem('spx_uid') || localStorage.getItem('user_id') || ''")
+                except:
+                    pass
+
+            user_key = cookie_dict.get('spx_uk') or cookie_dict.get('fms_user_skey') or ''
 
             browser.close()
 
-            # Đồng bộ các biến định danh
-            user_id = cookie_dict.get('spx_uid') or cookie_dict.get('fms_user_id') or ''
-            user_key = cookie_dict.get('spx_uk') or cookie_dict.get('fms_user_skey') or ''
-
+            # Đảm bảo đầy đủ các tham số bắt buộc của SPX Gateway
             if user_id:
-                cookie_dict['spx_uid'] = user_id
-                cookie_dict['fms_user_id'] = user_id
+                cookie_dict['spx_uid'] = str(user_id)
+                cookie_dict['fms_user_id'] = str(user_id)
             if user_key:
-                cookie_dict['spx_uk'] = user_key
-                cookie_dict['fms_user_skey'] = user_key
+                cookie_dict['spx_uk'] = str(user_key)
+                cookie_dict['fms_user_skey'] = str(user_key)
 
             cookie_dict['spx_cid'] = 'VN'
             cookie_dict['spx_st'] = '1'
@@ -81,7 +86,7 @@ def run():
             cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
             csrf_token = cookie_dict.get('csrftoken', '')
 
-            print(f"-> Chuỗi Cookie hoàn chỉnh (UID: {user_id}, CID: VN, CSRF: {'Có' if csrf_token else 'Không'})")
+            print(f"-> Thu được {len(cookie_dict)} khóa Cookie (UID: {user_id}, CID: VN, CSRF: {'Có' if csrf_token else 'Không'})")
 
             req_headers = {
                 "app": "FMS Portal",
@@ -98,7 +103,7 @@ def run():
             page_no = 1
             max_pages = 10
 
-            print("3. Đang gửi yêu cầu lấy dữ liệu chuyến xe...")
+            print("4. Đang gửi yêu cầu lấy dữ liệu chuyến xe...")
             while page_no <= max_pages:
                 linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&pageno={page_no}&count=100&query_type=1&tab_type=3&std={start_time},{end_time}"
 
@@ -130,7 +135,7 @@ def run():
                 print("⚠️ Cảnh báo: Không có chuyến xe nào trong khung giờ này.")
                 return
 
-            print("4. Đang gửi dữ liệu sang Google Sheets...")
+            print("5. Đang gửi dữ liệu sang Google Sheets...")
             payload = {
                 "action": "sync_linehaul",
                 "linehaul_trips": all_trips
