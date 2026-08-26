@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -29,20 +29,19 @@ def run():
         page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
         page.locator("input[type='password'], input[name='password']").first.fill(password)
         page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
+        page.wait_for_timeout(6000)
+
+        # Múi giờ Việt Nam GMT+7
+        tz_vn = timezone(timedelta(hours=7))
+        now_vn = datetime.now(tz_vn)
+        yesterday_vn = now_vn - timedelta(days=1)
         
-        # Chờ đăng nhập hoàn tất
-        page.wait_for_timeout(5000)
+        start_time = int(datetime(yesterday_vn.year, yesterday_vn.month, yesterday_vn.day, 0, 0, 0, tzinfo=tz_vn).timestamp())
+        end_time = int(datetime(now_vn.year, now_vn.month, now_vn.day, 23, 59, 59, tzinfo=tz_vn).timestamp())
 
-        # 3. Tính toán dải thời gian chuẩn: Từ hôm qua đến hết hôm nay
-        now = datetime.now()
-        yesterday = now - timedelta(days=1)
-        start_time = int(datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0).timestamp())
-        end_time = int(datetime(now.year, now.month, now.day, 23, 59, 59).timestamp())
+        linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&pageno=1&count=50&query_type=1&tab_type=3&std={start_time},{end_time}"
+        print(f"3. Gọi API: {linehaul_url}")
 
-        linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&pageno=1&count=100&query_type=1&tab_type=3&std={start_time},{end_time}"
-
-        # 4. Kéo dữ liệu Linehaul trực tiếp từ phiên trình duyệt Chromium
-        print("3. Đang kéo dữ liệu Linehaul Trips từ API...")
         trip_res = page.evaluate("""async (url) => {
             try {
                 const res = await fetch(url, {
@@ -57,14 +56,29 @@ def run():
             }
         }""", linehaul_url)
 
+        # In phản hồi thô từ SPX để kiểm tra cấu trúc
+        print(f"-> Phản hồi thô từ SPX: {str(trip_res)[:500]}")
+
         trips = []
         if isinstance(trip_res, dict):
-            trips = trip_res.get('data', {}).get('list') or trip_res.get('data', {}).get('trips') or []
-        print(f"-> Lấy thành công {len(trips)} chuyến xe Linehaul!")
+            data_obj = trip_res.get('data') or {}
+            if isinstance(data_obj, list):
+                trips = data_obj
+            elif isinstance(data_obj, dict):
+                trips = (data_obj.get('list') or 
+                         data_obj.get('records') or 
+                         data_obj.get('trips') or 
+                         data_obj.get('trip_list') or 
+                         data_obj.get('trip_station_list') or [])
 
+        print(f"-> Đã bóc tách được: {len(trips)} chuyến xe Linehaul!")
         browser.close()
 
-        # 5. Gửi dữ liệu sang Google Sheets
+        if len(trips) == 0:
+            print("⚠️ Không có chuyến xe nào để gửi.")
+            return
+
+        # Gửi dữ liệu sang Google Sheets
         print("4. Đang gửi dữ liệu sang Google Trang tính...")
         payload = {
             "action": "sync_linehaul",
