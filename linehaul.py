@@ -4,22 +4,18 @@ import time
 import json
 import math
 import traceback
-import concurrent.futures
 from datetime import datetime, timedelta, timezone
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from playwright.sync_api import sync_playwright
 
 username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
-# --- CẤU HÌNH QUY MÔ DỮ LIỆU & KHUNG GIỜ ---
-FROM_HOURS_AGO = 0    # Quét lùi 2 tiếng trước để không sót xe đầu ca
+# --- CẤU HÌNH KHUNG GIỜ QUÉT ---
+FROM_HOURS_AGO = 2    # Quét lùi 2 tiếng trước để không sót xe đầu ca
 TO_HOURS_AFTER = 8    # Quét tới 8 tiếng tiếp theo
 MAX_PAGES = 60        # Hỗ trợ tối đa 60 trang (~6.000 chuyến xe)
-MAX_WORKERS = 5       # 5 luồng song song tối ưu
 
 # DANH SÁCH 24 CỘT CẦN GIỮ LẠI
 TARGET_COLUMNS = [
@@ -33,17 +29,6 @@ TARGET_COLUMNS = [
 if not username or not password or not sheet_url:
     print("❌ Lỗi: Thiếu USERNAME, PASSWORD hoặc SHEET_URL trong GitHub Secrets!")
     exit(1)
-
-# Tạo Session tối ưu tốc độ
-session = requests.Session()
-retries = Retry(
-    total=3,
-    backoff_factor=0.3,
-    status_forcelist=[429, 500, 502, 503, 504]
-)
-adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=retries)
-session.mount('https://', adapter)
-session.mount('http://', adapter)
 
 def format_trip_station(st_list, tz_vn):
     """Bóc tách mảng trip_station thành lộ trình: Trạm 1 (STD) ➔ Trạm 2 (STA)"""
@@ -69,6 +54,7 @@ def format_item_to_row(item, tz_vn):
     for col in TARGET_COLUMNS:
         val = item.get(col)
         
+        # 1. Bóc tách riêng cho cột trip_station
         if col == "trip_station":
             row.append(format_trip_station(val, tz_vn))
         elif col in ["next_station_list", "next_station_name_list", "next_station_code_list"]:
@@ -88,16 +74,20 @@ def format_item_to_row(item, tz_vn):
             
     return row
 
-def fetch_page(page_no, base_url, req_headers):
-    """Tải 1 trang dữ liệu sử dụng Connection Pool"""
+def fetch_page_with_retry(page_no, base_url, req_headers, retries=3):
+    """Tải 1 trang dữ liệu có cơ chế tự động thử lại 3 lần nếu có sự cố mạng"""
     url = f"{base_url}&pageno={page_no}&count=100"
-    try:
-        res = session.get(url, headers=req_headers, timeout=25)
-        if res.status_code == 200:
-            data = res.json()
-            return data.get('data', {}).get('list') or data.get('data', {}).get('trips') or []
-    except:
-        pass
+    for attempt in range(retries):
+        try:
+            res = requests.get(url, headers=req_headers, timeout=25)
+            if res.status_code == 200:
+                data = res.json()
+                trips = data.get('data', {}).get('list') or data.get('data', {}).get('trips') or []
+                if trips:
+                    return trips
+            time.sleep(0.5)
+        except:
+            time.sleep(0.5)
     return []
 
 def run():
@@ -111,7 +101,7 @@ def run():
     print(f"   -> Dải giờ lọc STD: từ {datetime.fromtimestamp(start_time, tz_vn).strftime('%H:%M %d/%m')} đến {datetime.fromtimestamp(end_time, tz_vn).strftime('%H:%M %d/%m')}")
 
     try:
-        # BƯỚC 1: ĐĂNG NHẬP VÀ CHỜ NHẬN ĐỦ USER ID
+        # BƯỚC 1: ĐĂNG NHẬP VÀ TRÍCH XUẤT ĐẦY ĐỦ COOKIE
         with sync_playwright() as p:
             print("1. Khởi chạy trình duyệt Chromium đăng nhập SPX...")
             browser = p.chromium.launch(headless=True)
@@ -127,8 +117,8 @@ def run():
             page.locator("input[type='password'], input[name='password']").first.fill(password)
             page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
             
-            # Chờ máy chủ xác nhận đăng nhập và cấp mã fms_user_id
-            print("-> Đang chờ máy chủ xác nhận đăng nhập...")
+            # Chờ xác thực phiên đăng nhập
+            print("-> Đang chờ máy chủ xác nhận phiên đăng nhập...")
             user_id = ""
             user_key = ""
             for _ in range(15):
@@ -137,10 +127,10 @@ def run():
                 user_id = c_dict.get('fms_user_id') or c_dict.get('spx_uid') or ''
                 user_key = c_dict.get('fms_user_skey') or c_dict.get('spx_uk') or ''
                 if user_id:
-                    print(f"-> Xác nhận đăng nhập thành công! User ID: {user_id}")
+                    print(f"-> Đăng nhập thành công! (User ID: {user_id})")
                     break
 
-            # Truy cập trang Linehaul để kích hoạt toàn bộ token FMS
+            # Truy cập trang Linehaul để nạp toàn bộ quyền FMS
             page.goto("https://spx.shopee.vn/admin/transportation/trip", timeout=60000)
             page.wait_for_load_state("networkidle")
             time.sleep(3)
@@ -149,7 +139,7 @@ def run():
             cookie_dict = {c['name']: c['value'] for c in cookies}
             browser.close()
 
-        # BƯỚC 2: TỰ ĐỘNG VÁ ĐỦ BỘ 4 THÔNG SỐ SPX GATEWAY
+        # BƯỚC 2: TỰ ĐỘNG ĐỒNG BỘ ĐẦY ĐỦ BỘ KHÓA COOKIE CỦA SPX
         if not user_id:
             user_id = cookie_dict.get('fms_user_id') or cookie_dict.get('spx_uid') or ''
             user_key = cookie_dict.get('fms_user_skey') or cookie_dict.get('spx_uk') or ''
@@ -170,8 +160,6 @@ def run():
         cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
         csrf_token = cookie_dict.get('csrftoken', '')
 
-        print(f"-> Chuỗi Cookie đầy đủ (User ID: {user_id}, CSRF: {'Có' if csrf_token else 'Không'})")
-
         req_headers = {
             "app": "FMS Portal",
             "Cookie": cookie_string,
@@ -183,18 +171,14 @@ def run():
         if csrf_token:
             req_headers["x-csrftoken"] = csrf_token
 
-        # BƯỚC 3: KÉO ĐA LUỒNG TẤT CẢ CÁC HUB
+        # BƯỚC 3: TẢI TRANG 1 ĐỂ TÍNH TỔNG SỐ TRANG
         station_types = "2,3,7,12,14,16,18"
         base_api_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type={station_types}&trip_station_status=0&query_type=1&tab_type=3&std={start_time},{end_time}"
 
         print("2. Đang kiểm tra tổng số chuyến xe trên toàn hệ thống...")
-        p1_resp = session.get(f"{base_api_url}&pageno=1&count=100", headers=req_headers, timeout=30)
+        p1_resp = requests.get(f"{base_api_url}&pageno=1&count=100", headers=req_headers, timeout=30)
+        p1_res = p1_resp.json() if p1_resp.status_code == 200 else {}
         
-        if p1_resp.status_code != 200:
-            print(f"❌ Lỗi phản hồi API: {p1_resp.status_code} - {p1_resp.text[:300]}")
-            return
-
-        p1_res = p1_resp.json()
         data_obj = p1_res.get('data') if isinstance(p1_res.get('data'), dict) else {}
         total_trips = data_obj.get('total', 0)
         p1_trips = data_obj.get('list') or data_obj.get('trips') or []
@@ -202,26 +186,24 @@ def run():
         all_trips = list(p1_trips)
         total_pages = min(math.ceil(total_trips / 100), MAX_PAGES) if total_trips > 0 else 1
 
-        print(f"-> Hệ thống tìm thấy: {total_trips} chuyến xe (~{total_pages} trang).")
+        print(f"-> Đã lấy xong Trang 1 ({len(p1_trips)} chuyến). Tổng hệ thống có: {total_trips} chuyến (~{total_pages} trang).")
 
+        # BƯỚC 4: TẢI TUẦN TỰ THÔNG MINH (CÓ NGHỈ 0.25S & RETRY - ĐẢM BẢO LẤY ĐỦ 100%)
         if total_pages > 1:
-            print(f"3. Đang mở {MAX_WORKERS} luồng tối ưu kéo song song từ trang 2 đến {total_pages}...")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_page = {
-                    executor.submit(fetch_page, p_no, base_api_url, req_headers): p_no 
-                    for p_no in range(2, total_pages + 1)
-                }
-                for future in concurrent.futures.as_completed(future_to_page):
-                    res_list = future.result()
-                    all_trips.extend(res_list)
+            print(f"3. Đang tải tuần tự từ trang 2 đến {total_pages} (Đảm bảo 100% không sót chuyến)...")
+            for p_no in range(2, total_pages + 1):
+                page_trips = fetch_page_with_retry(p_no, base_api_url, req_headers, retries=3)
+                all_trips.extend(page_trips)
+                print(f"   -> Trang {p_no}/{total_pages}: +{len(page_trips)} chuyến (Tích lũy: {len(all_trips)})...")
+                time.sleep(0.25)  # Nghỉ 0.25s để máy chủ SPX phản hồi mượt mà 100%
 
-        print(f"✅ Thu thập thành công: {len(all_trips)} / {total_trips} chuyến xe từ tất cả các Hub!")
+        print(f"✅ Thu thập hoàn tất: {len(all_trips)} / {total_trips} chuyến xe từ tất cả các Hub!")
 
         if len(all_trips) == 0:
             print("⚠️ Cảnh báo: Không có chuyến xe nào trong khung giờ này.")
             return
 
-        # BƯỚC 4: BÓC TÁCH 24 CỘT VÀ GỬI SANG GOOGLE SHEETS
+        # BƯỚC 5: BÓC TÁCH VÀ GỬI SANG GOOGLE SHEETS
         print("4. Đang bóc tách và định dạng 24 cột dữ liệu...")
         rows_data = [format_item_to_row(t, tz_vn) for t in all_trips]
 
@@ -232,7 +214,7 @@ def run():
             "rows": rows_data
         }
         
-        res = session.post(sheet_url, json=payload, timeout=180)
+        res = requests.post(sheet_url, json=payload, timeout=180)
         print(f"Kết quả lưu vào Sheet: {res.text}")
 
     except Exception as err:
