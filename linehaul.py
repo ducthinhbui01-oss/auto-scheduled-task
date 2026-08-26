@@ -43,24 +43,42 @@ def run():
             page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
             page.locator("input[type='password'], input[name='password']").first.fill(password)
             page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
-            page.wait_for_timeout(5000)
+            
+            # Chờ hoàn tất tiến trình đăng nhập và khởi tạo session
+            print("-> Đang chờ phiên đăng nhập khởi tạo...")
+            time.sleep(6)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except:
+                pass
 
-            print("3. Truy cập trang Linehaul Trips để kích hoạt phân hệ FMS...")
-            page.goto("https://spx.shopee.vn/admin/transportation/trip", timeout=60000)
-            page.wait_for_load_state("networkidle")
-            time.sleep(4)
-
-            # Rút trích cookie đầy đủ từ trình duyệt
+            # Rút trích cookie
             cookies = context.cookies()
             cookie_dict = {c['name']: c['value'] for c in cookies}
-            cookie_dict['spx_cid'] = 'VN'
-            cookie_dict['spx_st'] = '1'
-            
-            cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
-            csrf_token = cookie_dict.get('csrftoken', '')
             browser.close()
 
-            # Sử dụng thư viện requests chuẩn của Python để đảm bảo 100% gửi trọn vẹn Cookie
+            # Đồng bộ hóa các cặp token định danh bắt buộc của SPX
+            user_id = cookie_dict.get('spx_uid') or cookie_dict.get('fms_user_id') or ''
+            user_key = cookie_dict.get('spx_uk') or cookie_dict.get('fms_user_skey') or ''
+
+            if user_id:
+                cookie_dict['spx_uid'] = user_id
+                cookie_dict['fms_user_id'] = user_id
+            if user_key:
+                cookie_dict['spx_uk'] = user_key
+                cookie_dict['fms_user_skey'] = user_key
+
+            cookie_dict['spx_cid'] = 'VN'
+            cookie_dict['spx_st'] = '1'
+            cookie_dict['language'] = 'vi'
+            cookie_dict['spx-lang'] = 'vi'
+            cookie_dict['spx-admin-lang'] = 'vi'
+
+            cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
+            csrf_token = cookie_dict.get('csrftoken', '')
+
+            print(f"-> Chuỗi Cookie hợp lệ (UID: {user_id}, CID: VN, CSRF: {'Có' if csrf_token else 'Không'})")
+
             req_headers = {
                 "app": "FMS Portal",
                 "Cookie": cookie_string,
@@ -76,7 +94,7 @@ def run():
             page_no = 1
             max_pages = 10
 
-            print("4. Đang gửi yêu cầu lấy dữ liệu chuyến xe...")
+            print("3. Đang gửi yêu cầu lấy dữ liệu chuyến xe...")
             while page_no <= max_pages:
                 linehaul_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&pageno={page_no}&count=100&query_type=1&tab_type=3&std={start_time},{end_time}"
 
@@ -108,7 +126,7 @@ def run():
                 print("⚠️ Cảnh báo: Không có chuyến xe nào trong khung giờ này.")
                 return
 
-            print("5. Đang gửi dữ liệu sang Google Sheets...")
+            print("4. Đang gửi dữ liệu sang Google Sheets...")
             payload = {
                 "action": "sync_linehaul",
                 "linehaul_trips": all_trips
