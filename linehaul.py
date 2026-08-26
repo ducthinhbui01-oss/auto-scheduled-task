@@ -13,7 +13,7 @@ password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
 # --- CẤU HÌNH KHUNG GIỜ QUÉT ---
-FROM_HOURS_AGO = 2    # Quét lùi 2 tiếng trước để không sót xe đầu ca
+FROM_HOURS_AGO = 0    # Quét lùi 2 tiếng trước để không sót xe đầu ca
 TO_HOURS_AFTER = 8    # Quét tới 8 tiếng tiếp theo
 MAX_PAGES = 60        # Hỗ trợ tối đa 60 trang (~6.000 chuyến xe)
 
