@@ -16,10 +16,10 @@ password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
 # --- CẤU HÌNH QUY MÔ DỮ LIỆU & KHUNG GIỜ ---
-FROM_HOURS_AGO = 2    # Quét lùi 2 tiếng trước để không sót xe đầu ca
+FROM_HOURS_AGO = 0    # Quét lùi 2 tiếng trước để không sót xe đầu ca
 TO_HOURS_AFTER = 8    # Quét tới 8 tiếng tiếp theo
 MAX_PAGES = 60        # Hỗ trợ tối đa 60 trang (~6.000 chuyến xe)
-MAX_WORKERS = 5       # 5 luồng song song tối ưu cho 40-50 trang
+MAX_WORKERS = 5       # 5 luồng song song tối ưu
 
 # DANH SÁCH 24 CỘT CẦN GIỮ LẠI
 TARGET_COLUMNS = [
@@ -34,7 +34,7 @@ if not username or not password or not sheet_url:
     print("❌ Lỗi: Thiếu USERNAME, PASSWORD hoặc SHEET_URL trong GitHub Secrets!")
     exit(1)
 
-# Tạo Session với Connection Pool để tái sử dụng kết nối tốc độ cao
+# Tạo Session tối ưu tốc độ
 session = requests.Session()
 retries = Retry(
     total=3,
@@ -111,7 +111,7 @@ def run():
     print(f"   -> Dải giờ lọc STD: từ {datetime.fromtimestamp(start_time, tz_vn).strftime('%H:%M %d/%m')} đến {datetime.fromtimestamp(end_time, tz_vn).strftime('%H:%M %d/%m')}")
 
     try:
-        # BƯỚC 1: ĐĂNG NHẬP VÀ TRÍCH XUẤT ĐẦY ĐỦ COOKIE
+        # BƯỚC 1: ĐĂNG NHẬP VÀ CHỜ NHẬN ĐỦ USER ID
         with sync_playwright() as p:
             print("1. Khởi chạy trình duyệt Chromium đăng nhập SPX...")
             browser = p.chromium.launch(headless=True)
@@ -126,20 +126,33 @@ def run():
             page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
             page.locator("input[type='password'], input[name='password']").first.fill(password)
             page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
-            page.wait_for_timeout(5000)
+            
+            # Chờ máy chủ xác nhận đăng nhập và cấp mã fms_user_id
+            print("-> Đang chờ máy chủ xác nhận đăng nhập...")
+            user_id = ""
+            user_key = ""
+            for _ in range(15):
+                time.sleep(1)
+                c_dict = {c['name']: c['value'] for c in context.cookies()}
+                user_id = c_dict.get('fms_user_id') or c_dict.get('spx_uid') or ''
+                user_key = c_dict.get('fms_user_skey') or c_dict.get('spx_uk') or ''
+                if user_id:
+                    print(f"-> Xác nhận đăng nhập thành công! User ID: {user_id}")
+                    break
 
-            # Truy cập trang Linehaul để kích hoạt toàn bộ token phân hệ FMS
+            # Truy cập trang Linehaul để kích hoạt toàn bộ token FMS
             page.goto("https://spx.shopee.vn/admin/transportation/trip", timeout=60000)
             page.wait_for_load_state("networkidle")
-            time.sleep(4)
+            time.sleep(3)
 
             cookies = context.cookies()
             cookie_dict = {c['name']: c['value'] for c in cookies}
             browser.close()
 
         # BƯỚC 2: TỰ ĐỘNG VÁ ĐỦ BỘ 4 THÔNG SỐ SPX GATEWAY
-        user_id = cookie_dict.get('fms_user_id') or cookie_dict.get('spx_uid') or ''
-        user_key = cookie_dict.get('fms_user_skey') or cookie_dict.get('spx_uk') or ''
+        if not user_id:
+            user_id = cookie_dict.get('fms_user_id') or cookie_dict.get('spx_uid') or ''
+            user_key = cookie_dict.get('fms_user_skey') or cookie_dict.get('spx_uk') or ''
 
         if user_id:
             cookie_dict['spx_uid'] = str(user_id)
@@ -157,7 +170,7 @@ def run():
         cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
         csrf_token = cookie_dict.get('csrftoken', '')
 
-        print(f"-> Đăng nhập thành công! (User ID: {user_id}, CSRF: {'Có' if csrf_token else 'Không'})")
+        print(f"-> Chuỗi Cookie đầy đủ (User ID: {user_id}, CSRF: {'Có' if csrf_token else 'Không'})")
 
         req_headers = {
             "app": "FMS Portal",
@@ -170,14 +183,18 @@ def run():
         if csrf_token:
             req_headers["x-csrftoken"] = csrf_token
 
-        # BƯỚC 3: KÉO ĐA LUỒNG TỐI ƯU CHO 4000 CHUYẾN XE
+        # BƯỚC 3: KÉO ĐA LUỒNG TẤT CẢ CÁC HUB
         station_types = "2,3,7,12,14,16,18"
         base_api_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type={station_types}&trip_station_status=0&query_type=1&tab_type=3&std={start_time},{end_time}"
 
         print("2. Đang kiểm tra tổng số chuyến xe trên toàn hệ thống...")
         p1_resp = session.get(f"{base_api_url}&pageno=1&count=100", headers=req_headers, timeout=30)
-        p1_res = p1_resp.json() if p1_resp.status_code == 200 else {}
         
+        if p1_resp.status_code != 200:
+            print(f"❌ Lỗi phản hồi API: {p1_resp.status_code} - {p1_resp.text[:300]}")
+            return
+
+        p1_res = p1_resp.json()
         data_obj = p1_res.get('data') if isinstance(p1_res.get('data'), dict) else {}
         total_trips = data_obj.get('total', 0)
         p1_trips = data_obj.get('list') or data_obj.get('trips') or []
