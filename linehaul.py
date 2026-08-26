@@ -29,20 +29,56 @@ if not username or not password or not sheet_url:
     print("❌ Lỗi: Thiếu USERNAME, PASSWORD hoặc SHEET_URL trong GitHub Secrets!")
     exit(1)
 
+def format_trip_station(st_list, tz_vn):
+    """Bóc tách mảng trip_station thành lộ trình trực quan: Trạm 1 (STD) ➔ Trạm 2 (STA)"""
+    if not isinstance(st_list, list) or len(st_list) == 0:
+        return ""
+    parts = []
+    for st in st_list:
+        name = st.get('station_name') or str(st.get('station', ''))
+        std = st.get('std', 0)
+        sta = st.get('sta', 0)
+        time_strs = []
+        if std and std > 1000000000:
+            time_strs.append(f"STD: {datetime.fromtimestamp(std, tz_vn).strftime('%d/%m %H:%M')}")
+        if sta and sta > 1000000000:
+            time_strs.append(f"STA: {datetime.fromtimestamp(sta, tz_vn).strftime('%d/%m %H:%M')}")
+        time_info = f" ({' | '.join(time_strs)})" if time_strs else ""
+        parts.append(f"{name}{time_info}")
+    return " ➔ ".join(parts)
+
 def format_item_to_row(item, tz_vn):
-    """Chuẩn hóa dữ liệu 1 chuyến xe thành 1 hàng 24 cột"""
+    """Chuẩn hóa dữ liệu 1 chuyến xe thành 1 hàng 24 cột sạch sẽ"""
     row = []
     for col in TARGET_COLUMNS:
         val = item.get(col)
-        if col in ["ctime", "mtime"] and isinstance(val, (int, float)) and val > 1000000000:
+        
+        # 1. Bóc tách riêng cho cột trip_station
+        if col == "trip_station":
+            row.append(format_trip_station(val, tz_vn))
+        
+        # 2. Xóa bỏ dấu ngoặc vuông ["..."] cho các cột danh sách trạm kế tiếp
+        elif col in ["next_station_list", "next_station_name_list", "next_station_code_list"]:
+            if isinstance(val, list):
+                row.append(", ".join(map(str, val)))
+            else:
+                row.append(str(val) if val is not None else "")
+                
+        # 3. Format thời gian ctime, mtime
+        elif col in ["ctime", "mtime"] and isinstance(val, (int, float)) and val > 1000000000:
             val_str = datetime.fromtimestamp(val, tz_vn).strftime('%d/%m/%Y %H:%M:%S')
             row.append(val_str)
-        elif isinstance(val, (dict, list)):
-            row.append(json.dumps(val, ensure_ascii=False))
+            
+        # 4. Format Boolean
         elif isinstance(val, bool):
             row.append("TRUE" if val else "FALSE")
+            
+        # 5. Các dữ liệu còn lại
+        elif isinstance(val, (dict, list)):
+            row.append(json.dumps(val, ensure_ascii=False))
         else:
             row.append(str(val) if val is not None else "")
+            
     return row
 
 def fetch_page(page_no, base_url, req_headers):
@@ -132,18 +168,18 @@ def run():
 
             base_api_url = f"https://spx.shopee.vn/api/admin/transportation/trip/list_v2?station_type=2,3,7,12,14,16,18&trip_station_status=0&query_type=1&tab_type=3&std={start_time},{end_time}"
 
-            # --- BƯỚC 2: TẢI TRANG 1 ĐỂ TÍNH TỔNG SỐ TRANG ---
+            # 2. Tải trang 1 để tính tổng số trang
             print("2. Đang kiểm tra tổng số chuyến xe...")
             p1_res = requests.get(f"{base_api_url}&pageno=1&count=100", headers=req_headers, timeout=30).json()
             total_trips = p1_res.get('data', {}).get('total', 0)
             p1_trips = p1_res.get('data', {}).get('list') or p1_res.get('data', {}).get('trips') or []
             
             all_trips = list(p1_trips)
-            total_pages = min(math.ceil(total_trips / 100), 50)  # Tối đa 50 trang (~5000 xe)
+            total_pages = min(math.ceil(total_trips / 100), 50)
 
             print(f"-> Tổng cộng hệ thống có: {total_trips} chuyến xe (~{total_pages} trang).")
 
-            # --- BƯỚC 3: KÉO ĐA LUỒNG TẤT CẢ CÁC TRANG CÒN LẠI (SIÊU NHANH) ---
+            # 3. Kéo đa luồng tất cả các trang còn lại
             if total_pages > 1:
                 print(f"3. Đang mở 8 luồng kéo song song từ trang 2 đến {total_pages}...")
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
@@ -152,7 +188,6 @@ def run():
                         for p_no in range(2, total_pages + 1)
                     }
                     for future in concurrent.futures.as_completed(future_to_page):
-                        page_num = future_to_page[future]
                         res_list = future.result()
                         all_trips.extend(res_list)
 
@@ -162,12 +197,12 @@ def run():
                 print("⚠️ Không có dữ liệu để gửi.")
                 return
 
-            # --- BƯỚC 4: CHUẨN HÓA SẴN DỮ LIỆU SANG MẢNG 24 CỘT ---
-            print("4. Đang xử lý tinh gọn dữ liệu 24 cột...")
+            # 4. Chuẩn hóa bóc tách dữ liệu 24 cột
+            print("4. Đang bóc tách và định dạng dữ liệu 24 cột...")
             rows_data = [format_item_to_row(t, tz_vn) for t in all_trips]
 
-            # --- BƯỚC 5: GỬI SANG GOOGLE SHEETS ---
-            print("5. Đang gửi dữ liệu siêu tốc sang Google Sheets...")
+            # 5. Gửi sang Google Sheets
+            print("5. Đang gửi dữ liệu sang Google Sheets...")
             payload = {
                 "action": "sync_linehaul_fast",
                 "headers": TARGET_COLUMNS,
