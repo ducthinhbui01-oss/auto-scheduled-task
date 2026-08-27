@@ -2,9 +2,9 @@ name: Auto Extract SPX Cookie
 
 on:
   schedule:
-    # Tự động chạy mỗi 3 tiếng vào phút thứ 17 (Né tắc nghẽn hàng chờ phút 00)
+    # Tự động chạy mỗi 3 tiếng vào phút thứ 17
     - cron: '17 */3 * * *'
-  workflow_dispatch: # Cho phép bấm nút "Run workflow" để chạy test thủ công bất kỳ lúc nào
+  workflow_dispatch: # Cho phép bấm nút "Run workflow" để chạy thủ công
 
 jobs:
   run-bot:
@@ -25,9 +25,14 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           playwright install chromium --with-deps
 
-      - name: Execute Python script
+      - name: Execute Python script (Auto Retry on Failure)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 180 # Chờ 3 phút trước khi thử lại nếu ngắt kết nối/lỗi
+          command: python main.py
         env:
           USERNAME: ${{ secrets.USERNAME }}
           PASSWORD: ${{ secrets.PASSWORD }}
           SHEET_URL: ${{ secrets.SHEET_URL }}
-        run: python main.py
