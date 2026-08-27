@@ -1,68 +1,80 @@
 import os
 import time
-import random
-import requests
 from playwright.sync_api import sync_playwright
 
 username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
 
-# Nhận biết sự kiện kích hoạt (Chạy thủ công hay Lịch tự động)
-event_name = os.getenv("GITHUB_EVENT_NAME", "workflow_dispatch")
-
-if not username or not password or not sheet_url:
-    print("❌ Lỗi: Thiếu USERNAME, PASSWORD hoặc SHEET_URL trong GitHub Secrets!")
-    exit(1)
-
 def run():
-    # ------------------------------------------------------------------
-    # NẾU BẤM RUN WORKFLOW THỦ CÔNG: BỎ QUA CHỜ (CHẠY NGAY TRONG 15s)
-    # NẾU TỰ ĐỘNG THEO LỊCH 3H/LẦN: TẠM DỪNG NGẪU NHIÊN TỪ 5 ĐẾN 30 PHÚT
-    # ------------------------------------------------------------------
-    if event_name == "workflow_dispatch":
-        print("⚡ Kích hoạt thủ công (Run workflow) -> Bỏ qua thời gian chờ, chạy ngay lập tức!")
-    else:
-        delay_seconds = random.randint(300, 1800) # Chờ ngẫu nhiên từ 5 đến 30 phút
-        print(f"⏳ Chạy theo lịch tự động 3h/lần: Tạm dừng ngẫu nhiên {delay_seconds // 60} phút ({delay_seconds}s)...")
-        time.sleep(delay_seconds)
-
+    print("================ BẮT ĐẦU CHẨN ĐOÁN ĐĂNG NHẬP SPX ================")
     with sync_playwright() as p:
-        print("1. Đang khởi chạy trình duyệt Chromium ngầm...")
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
-        print("2. Truy cập https://spx.shopee.vn/ ...")
+        # 1. Bắt gói tin phản hồi của các API đăng nhập
+        login_api_logs = []
+        page.on("response", lambda res: login_api_logs.append(
+            f"[{res.status}] {res.url[:80]}..."
+        ) if any(k in res.url.lower() for k in ["login", "auth", "passport", "account"]) else None)
+
+        print("1. Truy cập https://spx.shopee.vn/ ...")
         page.goto("https://spx.shopee.vn/", timeout=60000)
         page.wait_for_load_state("networkidle")
 
-        print("3. Điền thông tin Đăng nhập...")
+        print("2. Điền thông tin tài khoản...")
         page.locator("input[type='text'], input[name='username'], input[placeholder*='nhập'], input[placeholder*='Username']").first.fill(username)
         page.locator("input[type='password'], input[name='password']").first.fill(password)
-
-        print("4. Bấm nút Đăng nhập...")
+        
+        print("3. Bấm nút Đăng nhập...")
         page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first.click()
 
-        page.wait_for_timeout(5000)
+        print("4. Chờ 6 giây để máy chủ xử lý...")
+        page.wait_for_timeout(6000)
 
-        print("5. Rút trích danh sách Cookie phiên làm việc mới...")
+        # --- BÁO CÁO KẾT QUẢ CHẨN ĐOÁN THỰC TẾ ---
+        print("\n---------------- KẾT QUẢ CHẨN ĐOÁN ----------------")
+        print(f"📍 URL hiện tại sau khi đăng nhập: {page.url}")
+
+        # Kiểm tra thông báo lỗi trên giao diện (nếu có)
+        try:
+            alerts = page.locator(".error, .el-message, [class*='error'], [class*='alert'], [class*='tip']").all_text_contents()
+            clean_alerts = [a.strip() for a in alerts if a.strip()]
+            if clean_alerts:
+                print(f"⚠️ Thông báo hiển thị trên màn hình: {clean_alerts}")
+            else:
+                print("ℹ️ Không có cảnh báo lỗi nào trên giao diện.")
+        except:
+            pass
+
+        # In danh sách phản hồi từ API đăng nhập
+        print(f"🌐 Các API xác thực đã gọi: {login_api_logs}")
+
+        # Rút trích và kiểm tra từng Cookie
         cookies = context.cookies()
-        cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
-        
-        print(f"Lấy thành công {len(cookies)} cookies từ SPX Shopee!")
-        browser.close()
+        c_dict = {c['name']: c['value'] for c in cookies}
+        print(f"\n🍪 Tổng số Cookie thu được: {len(cookies)}")
+        print("📋 Danh sách các tên Cookie có trong phiên:")
+        for name in sorted(c_dict.keys()):
+            # Che bớt giá trị để bảo mật
+            val_preview = c_dict[name][:8] + "..." if len(c_dict[name]) > 12 else c_dict[name]
+            print(f"   • {name}: {val_preview}")
 
-        print("6. Đang gửi chuỗi Cookie mới sang Google Trang tính...")
-        payload = {
-            "status": "Lấy Cookie SPX Thành Công",
-            "result": cookie_string
-        }
-        
-        sheet_res = requests.post(sheet_url, json=payload, timeout=30)
-        print(f"Kết quả lưu vào Sheet: {sheet_res.text}")
+        # Đánh giá các khóa cốt lõi
+        has_uid = 'fms_user_id' in c_dict or 'spx_uid' in c_dict
+        has_skey = 'fms_user_skey' in c_dict or 'spx_uk' in c_dict
+        has_ec = 'SPC_EC' in c_dict or 'SPC_B_EC' in c_dict
+
+        print("\n================ KẾT LUẬN TỰ ĐỘNG ================")
+        print(f"1. Mã User ID (fms_user_id/spx_uid): {'✅ CÓ' if has_uid else '❌ KHÔNG TÌM THẤY'}")
+        print(f"2. Khóa phiên (fms_user_skey/spx_uk): {'✅ CÓ' if has_skey else '❌ KHÔNG TÌM THẤY'}")
+        print(f"3. Token SPC_EC: {'✅ CÓ' if has_ec else '❌ KHÔNG TÌM THẤY'}")
+        print("===================================================\n")
+
+        browser.close()
 
 if __name__ == "__main__":
     run()
