@@ -7,13 +7,13 @@ from playwright.sync_api import sync_playwright
 username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 sheet_url = os.getenv("SHEET_URL")
+github_event = os.getenv("GITHUB_EVENT_NAME", "unknown")
 
 if not username or not password or not sheet_url:
     print("❌ Lỗi: Thiếu USERNAME, PASSWORD hoặc SHEET_URL trong GitHub Secrets!")
     exit(1)
 
 def human_type(element, text):
-    """Mô phỏng gõ phím từng ký tự với độ trễ ngẫu nhiên như người thật"""
     element.click()
     time.sleep(random.uniform(0.3, 0.6))
     for char in text:
@@ -22,6 +22,15 @@ def human_type(element, text):
 
 def run():
     print("⚡ Bắt đầu mô phỏng thao tác người dùng để lấy Cookie SPX...")
+    
+    # Logic 1: Phân tách môi trường để tạo độ trễ ngẫu nhiên chống Bot
+    if github_event == "schedule":
+        delay_time = random.randint(60, 300) # Trễ ngẫu nhiên từ 1 đến 5 phút
+        print(f"🕒 Chạy tự động (Cron): Đang tạm dừng {delay_time} giây để phá vỡ chu kỳ tĩnh...")
+        time.sleep(delay_time)
+    else:
+        print("🚀 Chạy thủ công (Bấm tay): Bỏ qua thời gian chờ, thực thi ngay lập tức.")
+
     with sync_playwright() as p:
         print("1. Khởi chạy trình duyệt ẩn danh chống phát hiện bot...")
         browser = p.chromium.launch(
@@ -41,10 +50,9 @@ def run():
         )
         page = context.new_page()
 
-        # Xóa dấu vết tự động hóa (Anti-Bot Bypass)
         page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
             Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US', 'en'] });
             window.chrome = { runtime: {} };
         """)
@@ -54,7 +62,6 @@ def run():
         page.wait_for_load_state("networkidle")
         time.sleep(random.uniform(1.0, 2.0))
 
-        # Di chuột ngẫu nhiên mô phỏng người dùng
         page.mouse.move(random.randint(100, 400), random.randint(100, 300))
         time.sleep(0.5)
 
@@ -66,44 +73,42 @@ def run():
         pass_input = page.locator("input[type='password'], input[name='password']").first
         human_type(pass_input, password)
 
-        # Rê chuột vào nút Đăng nhập
         print("5. Di chuột và bấm nút Đăng nhập...")
         login_btn = page.locator("button[type='submit'], button:has-text('Đăng nhập'), button:has-text('Login')").first
         login_btn.hover()
         time.sleep(random.uniform(0.4, 0.8))
         login_btn.click()
 
-        # Chờ chuyển hướng tự nhiên sau đăng nhập
         print("-> Đang chờ chuyển hướng vào trang chủ...")
         try:
             page.wait_for_url(lambda u: "spx.shopee.vn" in u and "authenticate" not in u, timeout=30000)
             page.wait_for_load_state("networkidle", timeout=15000)
         except:
-            pass
+            print("⚠️ Cảnh báo: Quá thời gian chờ chuyển trang (có thể bị Captcha ẩn).")
         time.sleep(4)
 
-        # Mở trang phân hệ kho để kích hoạt bộ chìa khóa fms_user_skey
         print("6. Mở phân hệ SPX để nạp toàn bộ chìa khóa phiên...")
         page.goto("https://spx.shopee.vn/admin/transportation/trip", timeout=60000)
         page.wait_for_load_state("networkidle")
         time.sleep(4)
 
-        # Rút trích toàn bộ cookie
         cookies = context.cookies()
         cookie_dict = {c['name']: c['value'] for c in cookies}
         browser.close()
 
-        # Lấy User ID và Session Key
         user_id = cookie_dict.get('fms_user_id') or cookie_dict.get('spx_uid') or ''
         user_key = cookie_dict.get('fms_user_skey') or cookie_dict.get('spx_uk') or ''
 
-        if user_id:
-            cookie_dict['spx_uid'] = str(user_id)
-            cookie_dict['fms_user_id'] = str(user_id)
-        if user_key:
-            cookie_dict['spx_uk'] = str(user_key)
-            cookie_dict['fms_user_skey'] = str(user_key)
+        # Logic 2: Fail-Fast - Ép lỗi nếu lấy phải Cookie rác
+        if not user_id or not user_key:
+            print("❌ LỖI NGHIÊM TRỌNG: Không lấy được Session Key. Hệ thống SPX đã chặn luồng đăng nhập.")
+            print("🔄 Ép dừng kịch bản (exit 1) để kích hoạt cơ chế tự động chạy lại đổi IP...")
+            exit(1)
 
+        cookie_dict['spx_uid'] = str(user_id)
+        cookie_dict['fms_user_id'] = str(user_id)
+        cookie_dict['spx_uk'] = str(user_key)
+        cookie_dict['fms_user_skey'] = str(user_key)
         cookie_dict['spx_cid'] = 'VN'
         cookie_dict['spx_st'] = '1'
         cookie_dict['language'] = 'vi'
@@ -113,12 +118,10 @@ def run():
         cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
 
         print("\n---------------- KẾT QUẢ MÔ PHỎNG ----------------")
-        print(f"User ID thu được: {'✅ ' + str(user_id) if user_id else '❌ RỖNG'}")
-        print(f"Session Key (skey): {'✅ CÓ' if user_key else '❌ RỖNG'}")
-        print(f"Tổng số Cookie hợp lệ: {len(cookie_dict)}")
+        print(f"User ID: ✅ {user_id}")
+        print(f"Session Key: ✅ {user_key[:5]}********")
         print("--------------------------------------------------\n")
 
-        # Gửi sang Google Sheets
         print("7. Đang lưu Cookie vào Google Sheets...")
         payload = {
             "status": "Lấy Cookie SPX Thành Công",
