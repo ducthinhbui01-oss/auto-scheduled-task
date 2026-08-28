@@ -78,7 +78,6 @@ def run():
         time.sleep(random.uniform(0.4, 0.8))
         login_btn.click()
 
-        # ÁP DỤNG LOGIC QUÉT COOKIE TỪ LINEHAUL.PY ĐỂ KHÔNG BỊ TRƯỢT MỤC TIÊU
         print("-> Đang chờ máy chủ xác nhận phiên đăng nhập và cấp Cookie...")
         user_id = ""
         user_key = ""
@@ -88,12 +87,17 @@ def run():
             user_id = c_dict.get('fms_user_id') or c_dict.get('spx_uid') or ''
             user_key = c_dict.get('fms_user_skey') or c_dict.get('spx_uk') or ''
             
-            # Chỉ báo thành công và thoát lặp khi đã thu đủ cả ID lẫn Key
             if user_id and user_key:
                 print(f"-> Đăng nhập thành công! (User ID: {user_id})")
                 break
 
-        # Nếu quét 15 giây vẫn không có Key -> Dừng sớm, không ép mở trang /trip gây lỗi rỗng
+        print("-> Đang chờ trang chủ ổn định để tránh xung đột điều hướng...")
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+            time.sleep(3)
+        except Exception:
+            print("-> Bỏ qua thời gian chờ trang chủ, tiếp tục luồng...")
+
         if not user_id or not user_key:
             print("❌ LỖI NGHIÊM TRỌNG: Không lấy được Session Key. Hệ thống SPX đã chặn luồng đăng nhập.")
             print("🔄 Ép dừng kịch bản (exit 1) để kích hoạt cơ chế tự động chạy lại đổi IP...")
@@ -105,7 +109,6 @@ def run():
         page.wait_for_load_state("networkidle")
         time.sleep(3)
 
-        # Trích xuất lại Cookie lần cuối sau khi đã vào được phân hệ nội bộ
         final_cookies = context.cookies()
         cookie_dict = {c['name']: c['value'] for c in final_cookies}
         browser.close()
