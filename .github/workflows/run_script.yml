@@ -2,11 +2,15 @@ name: Auto Extract SPX Cookie
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '13 18 * * *' # Kích hoạt lúc ~01:13 sáng (Giờ VN)
+    - cron: '37 21 * * *' # Kích hoạt lúc ~04:37 sáng (Giờ VN)
+    - cron: '04 0 * * *'  # Kích hoạt lúc ~07:04 sáng (Giờ VN)
+    - cron: '52 3 * * *'  # Kích hoạt lúc ~10:52 sáng (Giờ VN)
+    - cron: '23 6 * * *'  # Kích hoạt lúc ~13:23 chiều (Giờ VN)
+    - cron: '48 9 * * *'  # Kích hoạt lúc ~16:48 chiều (Giờ VN)
+    - cron: '19 12 * * *' # Kích hoạt lúc ~19:19 tối (Giờ VN)
+    - cron: '57 15 * * *' # Kích hoạt lúc ~22:57 tối (Giờ VN)
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   run-bot:
