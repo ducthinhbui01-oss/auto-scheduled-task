@@ -23,9 +23,8 @@ def human_type(element, text):
 def run():
     print("⚡ Bắt đầu mô phỏng thao tác người dùng để lấy Cookie SPX...")
     
-    # Logic 1: Phân tách môi trường để tạo độ trễ ngẫu nhiên chống Bot
     if github_event == "schedule":
-        delay_time = random.randint(60, 300) # Trễ ngẫu nhiên từ 1 đến 5 phút
+        delay_time = random.randint(60, 300)
         print(f"🕒 Chạy tự động (Cron): Đang tạm dừng {delay_time} giây để phá vỡ chu kỳ tĩnh...")
         time.sleep(delay_time)
     else:
@@ -79,31 +78,37 @@ def run():
         time.sleep(random.uniform(0.4, 0.8))
         login_btn.click()
 
-        print("-> Đang chờ chuyển hướng vào trang chủ...")
-        try:
-            page.wait_for_url(lambda u: "spx.shopee.vn" in u and "authenticate" not in u, timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except:
-            print("⚠️ Cảnh báo: Quá thời gian chờ chuyển trang (có thể bị Captcha ẩn).")
-        time.sleep(4)
+        # ÁP DỤNG LOGIC QUÉT COOKIE TỪ LINEHAUL.PY ĐỂ KHÔNG BỊ TRƯỢT MỤC TIÊU
+        print("-> Đang chờ máy chủ xác nhận phiên đăng nhập và cấp Cookie...")
+        user_id = ""
+        user_key = ""
+        for _ in range(15):
+            time.sleep(1)
+            c_dict = {c['name']: c['value'] for c in context.cookies()}
+            user_id = c_dict.get('fms_user_id') or c_dict.get('spx_uid') or ''
+            user_key = c_dict.get('fms_user_skey') or c_dict.get('spx_uk') or ''
+            
+            # Chỉ báo thành công và thoát lặp khi đã thu đủ cả ID lẫn Key
+            if user_id and user_key:
+                print(f"-> Đăng nhập thành công! (User ID: {user_id})")
+                break
+
+        # Nếu quét 15 giây vẫn không có Key -> Dừng sớm, không ép mở trang /trip gây lỗi rỗng
+        if not user_id or not user_key:
+            print("❌ LỖI NGHIÊM TRỌNG: Không lấy được Session Key. Hệ thống SPX đã chặn luồng đăng nhập.")
+            print("🔄 Ép dừng kịch bản (exit 1) để kích hoạt cơ chế tự động chạy lại đổi IP...")
+            browser.close()
+            exit(1)
 
         print("6. Mở phân hệ SPX để nạp toàn bộ chìa khóa phiên...")
         page.goto("https://spx.shopee.vn/admin/transportation/trip", timeout=60000)
         page.wait_for_load_state("networkidle")
-        time.sleep(4)
+        time.sleep(3)
 
-        cookies = context.cookies()
-        cookie_dict = {c['name']: c['value'] for c in cookies}
+        # Trích xuất lại Cookie lần cuối sau khi đã vào được phân hệ nội bộ
+        final_cookies = context.cookies()
+        cookie_dict = {c['name']: c['value'] for c in final_cookies}
         browser.close()
-
-        user_id = cookie_dict.get('fms_user_id') or cookie_dict.get('spx_uid') or ''
-        user_key = cookie_dict.get('fms_user_skey') or cookie_dict.get('spx_uk') or ''
-
-        # Logic 2: Fail-Fast - Ép lỗi nếu lấy phải Cookie rác
-        if not user_id or not user_key:
-            print("❌ LỖI NGHIÊM TRỌNG: Không lấy được Session Key. Hệ thống SPX đã chặn luồng đăng nhập.")
-            print("🔄 Ép dừng kịch bản (exit 1) để kích hoạt cơ chế tự động chạy lại đổi IP...")
-            exit(1)
 
         cookie_dict['spx_uid'] = str(user_id)
         cookie_dict['fms_user_id'] = str(user_id)
