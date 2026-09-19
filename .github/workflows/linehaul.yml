@@ -1,11 +1,7 @@
 name: 🚚 Kéo Linehaul Trips
 
 on:
-  workflow_dispatch: # Bấm chạy thủ công
-  schedule:
-    - cron: '4 23 * * *'  # Chạy lúc 06:04 giờ Việt Nam
-    - cron: '14 6 * * *'   # Chạy lúc 13:14 giờ Việt Nam
-    - cron: '7 15 * * *'   # Chạy lúc 22:07 giờ Việt Nam
+  workflow_dispatch: # Chỉ giữ lại trigger thủ công và qua API
 
 jobs:
   run-linehaul:
