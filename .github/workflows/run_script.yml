@@ -15,9 +15,6 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-24.04
-    # Cấp quyền ghi để tool keepalive có thể tạo commit chống đóng băng workflow
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout repository code
@@ -27,13 +24,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      # Bước xử lý lỗi mạng DNS kho Ubuntu của GitHub
-      - name: Xử lý lỗi mạng DNS kho Ubuntu
-        run: |
-          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list 2>/dev/null || true
-          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
-          sudo apt-get update
 
       - name: Install Python dependencies & Playwright Browser
         run: |
@@ -52,7 +42,3 @@ jobs:
           USERNAME: ${{ secrets.USERNAME }}
           PASSWORD: ${{ secrets.PASSWORD }}
           SHEET_URL: ${{ secrets.SHEET_URL }}
-
-      # Bước tự động tạo hoạt động để GitHub không vô hiệu hóa workflow sau 60 ngày
-      - name: Keepalive Workflow
-        uses: gautamkrishnar/keepalive-workflow@v2
